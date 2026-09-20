@@ -595,7 +595,14 @@ gx_gpio_reset (FpiDeviceGoodixTls *self)
 
   chip = open ("/dev/gpiochip0", O_RDWR | O_CLOEXEC);
   if (chip < 0)
-    return;
+    {
+      /* Never silent: fprintd's DeviceAllow= policy denies this even to root,
+       * and without the reset SPI still works, so the only symptom is a sensor
+       * that behaves like a protocol-timing bug. */
+      fp_warn ("reset: cannot open /dev/gpiochip0 (%s); reset skipped "
+               "(see DeviceAllow= in fprintd.service.d)", g_strerror (errno));
+      return;
+    }
   req.num_lines = 1;
   req.offsets[0] = line;
   req.config.flags = GPIO_V2_LINE_FLAG_OUTPUT;
@@ -608,10 +615,12 @@ gx_gpio_reset (FpiDeviceGoodixTls *self)
     }
   val.mask = 1;
   val.bits = active_high ? 1 : 0;        /* assert reset */
-  ioctl (req.fd, GPIO_V2_LINE_SET_VALUES_IOCTL, &val);
+  if (ioctl (req.fd, GPIO_V2_LINE_SET_VALUES_IOCTL, &val) < 0)
+    fp_warn ("reset: cannot assert line %u: %s", line, g_strerror (errno));
   g_usleep (10000);
   val.bits = active_high ? 0 : 1;        /* release: MCU running */
-  ioctl (req.fd, GPIO_V2_LINE_SET_VALUES_IOCTL, &val);
+  if (ioctl (req.fd, GPIO_V2_LINE_SET_VALUES_IOCTL, &val) < 0)
+    fp_warn ("reset: cannot release line %u: %s", line, g_strerror (errno));
   g_usleep (120000);
   close (req.fd);
   close (chip);
